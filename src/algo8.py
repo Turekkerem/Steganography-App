@@ -85,19 +85,16 @@ def compute_parameters(lc, lb, lz=8):
     Returns (n, m, Cp, Cn, log2_m, log2_Lz).
     """
     n = 0
+    log2_lz = int(math.log2(lz))
     while True:
-        n += 1
-        m = lc // n
+        n += 1 #number of partitions
+        m = lc // n #number of embedding locations in a partition
         if m <= 0:
-            raise ValueError(
-                f"Cover text is too short ({lc} characters) to hide {lb} bits of message. "
-                "Please provide a longer cover text or a shorter secret message."
-            )
+            raise ValueError(f"Cover text is too short ({lc} characters) to hide {lb} bits of message. ")
         log2_m = int(math.log2(m)) if m >= 1 else 0
-        log2_lz = int(math.log2(lz))
-        cp = log2_m + log2_lz
-        cn = cp * n
-        if cn >= lb:
+        cp = log2_m + log2_lz #partition capacity
+        cn = cp * n #total capacity
+        if cn >= lb: #if total capacity >= length of the binary secret, then ok
             return n, m, cp, cn, log2_m, log2_lz
 
 def embed(cover_text, secret_message, key):
@@ -119,12 +116,12 @@ def embed(cover_text, secret_message, key):
 
     n, m, cp, cn, log2_m, log2_lz = compute_parameters(lc, lb, lz)
 
-    # Divide Tc into n partitions of size m
+    #Divide Tc into n partitions of size m
     tc_parts = [clean_tc[i * m:(i + 1) * m] for i in range(n)]
-    # Remaining (unused) covertext
+    #Remaining (unused) covertext
     rem_tc = clean_tc[n * m:]
 
-    # Divide Mb into n partitions of size Cp (pad with 0s if Cn > Lb)
+    #Divide Mb into n partitions of size Cp (pad with 0s if Cn > Lb)
     mb_padded = mb.ljust(cn, '0')
     mb_parts = [mb_padded[i * cp:(i + 1) * cp] for i in range(n)]
 
@@ -133,16 +130,20 @@ def embed(cover_text, secret_message, key):
         pi = tc_parts[i] #covertext chunks
         bi = mb_parts[i] #binary chunks (compressed secret)
 
-        # log2(Lz) codes 3 bits of information. log2(m) codes that many bits
+        # log2(Lz) codes 3 bits of information. log2(m) codes the rest
         # log2(Lz) tells us which ZWC to pick
         # log2(m) tells us where to insert it
+        #example: if the size of one binary chunk is 8 bits, there are 8 possible insertion locations
+        #so floor(log2(8)) = 3, then bi[log2_lz:log2_lz + log2_m] codes 3 bits of information
+        #which is enough to cover all insertion positions
+        #importantly, an 8-bit chunk has 8 insertion locations, not 9
         zd = int(bi[:log2_lz], 2)
         if log2_m > 0:
             ld = int(bi[log2_lz:log2_lz + log2_m], 2)
         else:
             ld = 0
 
-        # Insert Z[Zd] at Ld location
+        #Insert Z[Zd] at Ld location
         new_pi = pi[:ld] + ZWC[zd] + pi[ld:]
         ts_parts.append(new_pi)
 
@@ -150,15 +151,15 @@ def embed(cover_text, secret_message, key):
     ls = len(stegotext)
 
     info = {
-        'n': n,
-        'm': m,
-        'Cp': cp,
-        'Cn': cn,
-        'Lb': lb,
-        'Lc': lc,
-        'Ls': ls,
-        'capacity': lb / (ls * 8),  # Equation 9: C = Sm / Ss
-        'modification_ratio': lb / n,  # Equation 12: R = Sm / Nm
+        'n': n, #number of partitions
+        'm': m, #Number of embedding locations in a partition
+        'Cp': cp, #partition capacity
+        'Cn': cn, #capacity of all n partitions
+        'Lb': lb, #length of secret message in bits
+        'Lc': lc, #length of cover text in characters
+        'Ls': ls, #length of stegotext in characters
+        'capacity': lb / (ls * 8),  #C = Sm / Ss
+        'modification_ratio': lb / n,  #R = Sm / Nm
         'key_used': bool(key and len(key.strip()) > 0),
     }
 
@@ -170,7 +171,7 @@ def extract(stegotext, key):
 
     lz = len(ZWC)
 
-    # Count ZWCs (number of modifications/insertions)
+    #Count ZWCs (number of modifications/insertions)
     n = sum(1 for c in stegotext if c in ZWC)
     if n == 0:
         raise ValueError("No ZWCs found in text.")
@@ -178,24 +179,24 @@ def extract(stegotext, key):
     lc = ls - n
     m = lc // n
     if m <= 0:
-        raise ValueError("Invalid stegotext: partition length m is 0.")
+        raise ValueError("Partition length m can't be 0.")
 
     log2_m = int(math.log2(m)) if m >= 1 else 0
     log2_lz = int(math.log2(lz))
 
-    # Divide Ts into n partitions of size m + 1
-    part_size = m + 1
+    #Divide Ts into n partitions of size m + 1
+    part_size = m + 1 #this is the partition length AFTER embedding
     ts_parts = [stegotext[i * part_size:(i + 1) * part_size] for i in range(n)]
 
-    # Extract bits from each partition
-    # Iterate through each chunk of stegotext
+    #Extract bits from each partition
+    #Iterate through each chunk of stegotext
     mb_parts = []
     for pi in ts_parts:
         found = False
         for idx, c in enumerate(pi):
             if c in ZWC:
-                zd = ZWC.index(c)
-                ld = idx
+                zd = ZWC.index(c) #first 3 bits of information
+                ld = idx #the position of the ZWC tells us the remained of information
                 found = True
                 break
         if not found:
@@ -205,7 +206,6 @@ def extract(stegotext, key):
         l_b = format(ld, f'0{log2_m}b') if log2_m > 0 else ''
         mb_parts.append(zb + l_b)
 
-    # Concatenate all the bits
     mb = ''.join(mb_parts)
     return decompress_message(mb, key)
 
@@ -233,7 +233,7 @@ class Algo8Tab(TabTemplate):
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet(
-            "color: #333; font-size: 12px; padding: 6px; background: #f8f9fa; "
+            "color: #333; font-size: 14pt; padding: 6px; background: #f8f9fa; "
             "border: 1px solid #dee2e6; border-radius: 4px; margin-top: 6px;"
         )
 
@@ -278,7 +278,7 @@ class Algo8Tab(TabTemplate):
         text_to_extract = self.covertext_input.toPlainText()
 
         if not text_to_extract.strip():
-            QMessageBox.warning(self, "Input Error", "Please enter stegotext into the Cover Text field")
+            QMessageBox.warning(self, "Input Error", "No stegotext provided")
             return
 
         try:
