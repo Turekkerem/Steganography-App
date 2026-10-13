@@ -1,5 +1,4 @@
 """
-Implementation of the steganographic algorithm described in:
 "Enhancing Imperceptibility: Zero-width Character-based Text Steganography for Preserving Message Privacy"
 Saqib Ishtiaq, Naveed Ejaz, Muhammad Usman Hashmi, Syed Imran Hussain Shah (2025).
 Acta Informatica Pragensia, 14(3), 445-459. https://doi.org/10.18267/j.aip.271
@@ -12,7 +11,7 @@ from templates import TabTemplate
 from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QSplitter, QMessageBox
 
-# Eight Zero-Width Characters (Table 3 in the paper)
+# Zero-Width Characters
 # 1. U+200B: Zero width space
 # 2. U+200C: Zero width non-joiner
 # 3. U+200D: Zero width joiner
@@ -22,14 +21,14 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QSplitter, QMessageBox
 # 7. U+202D: Left-to-right override
 # 8. U+180E: Mongolian vowel separator
 ZWC = [
-    '\u200b',  # 0 -> 000
-    '\u200c',  # 1 -> 001
-    '\u200d',  # 2 -> 010
-    '\u200e',  # 3 -> 011
-    '\u202a',  # 4 -> 100
-    '\u202c',  # 5 -> 101
-    '\u202d',  # 6 -> 110
-    '\u180e',  # 7 -> 111
+    '\u200b',
+    '\u200c',
+    '\u200d',
+    '\u200e',
+    '\u202a',
+    '\u202c',
+    '\u202d',
+    '\u180e',
 ]
 
 def text_to_bits(text: str) -> str:
@@ -49,7 +48,7 @@ def compress_message(secret_message, key):
     if key and len(key.strip()) > 0:
         missing = set(secret_message) - set(key)
         if missing:
-            missing_chars = ", ".join(missing)
+            missing_chars = ", ".join(repr(x) for x in missing)
             raise ValueError(
                 f"Secret message contains character(s) not present in key: [{missing_chars}]. "
                 "The key text must contain all unique characters of the secret message to build the Huffman tree."
@@ -71,18 +70,17 @@ def decompress_message(mb_bits, key):
             raw_bytes = bytes(int(b, 2) for b in byte_chunks)
             return codec.decode(raw_bytes)
         except Exception as e:
-            raise ValueError(f"Huffman decompression failed: {e}. Ensure the correct key was used.")
+            raise ValueError(f"Huffman decompression failed: {e}")
     else:
         return bits_to_text(mb_bits)
 
 def compute_parameters(lc, lb, lz=8):
     """
-    Calculates embedding parameters according to Algorithm 1:
+    Calculates embedding parameters:
     Finds the minimum number of partitions n such that Cn >= Lb, where:
     m = floor(Lc / n)
     Cp = log2(m) + log2(Lz)
     Cn = Cp * n
-    Returns (n, m, Cp, Cn, log2_m, log2_Lz).
     """
     n = 0
     log2_lz = int(math.log2(lz))
@@ -137,7 +135,7 @@ def embed(cover_text, secret_message, key):
         #so floor(log2(8)) = 3, then bi[log2_lz:log2_lz + log2_m] codes 3 bits of information
         #which is enough to cover all insertion positions
         #importantly, an 8-bit chunk has 8 insertion locations, not 9
-        zd = int(bi[:log2_lz], 2)
+        zd = int(bi[:log2_lz], 2) #take three most significant (leftmost) bits
         if log2_m > 0:
             ld = int(bi[log2_lz:log2_lz + log2_m], 2)
         else:
@@ -158,8 +156,6 @@ def embed(cover_text, secret_message, key):
         'Lb': lb, #length of secret message in bits
         'Lc': lc, #length of cover text in characters
         'Ls': ls, #length of stegotext in characters
-        'capacity': lb / (ls * 8),  #C = Sm / Ss
-        'modification_ratio': lb / n,  #R = Sm / Nm
         'key_used': bool(key and len(key.strip()) > 0),
     }
 
@@ -209,23 +205,6 @@ def extract(stegotext, key):
     mb = ''.join(mb_parts)
     return decompress_message(mb, key)
 
-def calculate_capacity(sm_bits, ss_chars):
-    """C = Sm / Ss
-    Sm - size of secret message in bits
-    Ss - size of stegotext in bits (chars * 8)
-    """
-    return sm_bits / (ss_chars * 8)
-
-def calculate_modification_ratio(sm_bits, nm_modifications):
-    """R = Sm / Nm.
-    Sm - size of secret message in bits
-    Nm - number of modifications (insertions)
-    """
-    if nm_modifications == 0:
-        return 0
-    else:
-        return sm_bits / nm_modifications
-
 class Algo8Tab(TabTemplate):
     def __init__(self):
         super().__init__()
@@ -263,12 +242,11 @@ class Algo8Tab(TabTemplate):
             stego, info = embed(cover, secret, key)
             self.result_output.setPlainText(stego)
 
-            mode_str = "Huffman Compressed with Pre-shared Key" if info['key_used'] else "Standard 8-bit ASCII"
+            mode_str = "Huffman Compressed" if info['key_used'] else "Standard 8-bit ASCII"
             self.status_label.setText(
                 f"<b>Embedding Successful!</b> ({mode_str})<br>"
                 f"• <b>Partitions (n):</b> {info['n']} | <b>Partition size (m):</b> {info['m']} chars<br>"
                 f"• <b>Bits/partition (Cp):</b> {info['Cp']} bits | <b>Total capacity (Cn):</b> {info['Cn']} bits (Secret: {info['Lb']} bits)<br>"
-                f"• <b>Capacity (C):</b> {info['capacity']:.4f} | <b>Modification Ratio (R):</b> {info['modification_ratio']:.2f} bits/insertion"
             )
         except Exception as e:
             QMessageBox.critical(self, "Embedding Error", str(e))
