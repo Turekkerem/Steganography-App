@@ -7,7 +7,7 @@ Vol. 29 (2026), No. 6, pp. 2349–2363
 http://dx.doi.org/10.47974/JDMSC-2610
 """
 from Crypto.Cipher import AES
-
+import os
 #Covertext MUST contain every character in secret
 def create_main_array(covertext):
     #assumes only lowercase latin characters
@@ -21,8 +21,10 @@ def create_main_array(covertext):
     return A
 
 def AES_encrypt(A, key, IV):
-    
-    pass
+    cipher = AES.new(key,AES.MODE_CTR,nonce = IV)
+    return cipher.encrypt(A)
 
 def AES_decrypt(A, key, IV):
-    pass
+    cipher = AES.new(key,AES.MODE_CTR,nonce = IV)
+    return cipher.decrypt(A)
+
