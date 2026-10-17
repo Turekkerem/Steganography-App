@@ -1,8 +1,8 @@
-import os
-from Crypto.Hash import HMAC,SHA3_224,SHA3_256
+from PyQt5.QtWidgets import QMessageBox
+from templates import TabTemplate
+from Crypto.Hash import HMAC, SHA3_256
 
-
-
+# ======================= LOGIKA ALGORYTMU =======================
 
 CONFUSABLE_CHARS = {
     '-': ['-', '\u2010'],
@@ -34,29 +34,21 @@ CONFUSABLE_SPACES = [
     '\u205f'   # 111: Medium Mathematical Space
 ]
 
-
 ORIGINALS = {val[0] for val in CONFUSABLE_CHARS.values()}
 DUPLICATES = {val[1] for val in CONFUSABLE_CHARS.values()}
 CHAR_TO_DUP = {val[0]: val[1] for val in CONFUSABLE_CHARS.values()}
 
 SPACES = set(CONFUSABLE_SPACES)
-
 SPACE_TO_BITS = {space_char: f"{idx:03b}" for idx, space_char in enumerate(CONFUSABLE_SPACES)}
 
 
 def embed_watermark(text: str, watermark_bits: str) -> str:
-    """
-    Algorithm 1: Watermark Embedding[cite: 6]
-    Osadza ciąg bitów (np. 64-bitowy hash) w tekście za pomocą znaków konfuzyjnych.
-    """
     watermarked_text = []
     w_idx = 0
     w_len = len(watermark_bits)
     
     for c in text:
-        
         if w_idx < w_len and (c in ORIGINALS or c in SPACES):
-            
             if c in SPACES:
                 bits = watermark_bits[w_idx:w_idx+3]
                 w_idx += 3
@@ -76,17 +68,12 @@ def embed_watermark(text: str, watermark_bits: str) -> str:
                 else:
                     watermarked_text.append(c)
         else:
-            
             watermarked_text.append(c)
             
     return "".join(watermarked_text)
 
 
 def extract_watermark(watermarked_text: str, payload_size: int = 64) -> str:
-    """
-    Algorithm 2: Watermark Extraction[cite: 7]
-    Wydobywa ukryte bity z oznaczonego tekstu w sposób "ślepy" (bez udziału tekstu oryginalnego)[cite: 6, 7].
-    """
     extracted_bits = []
     
     for c in watermarked_text:
@@ -105,29 +92,95 @@ def extract_watermark(watermarked_text: str, payload_size: int = 64) -> str:
     return result_string[:payload_size]
 
 
+# ======================= KLASA ZAKŁADKI GUI =======================
 
-if __name__=="__main__":
-    key = b'Sixteen byte key'
-    message = b'Wiadomosc do podpisania'
-    long_text = """Tonight I would like to talk about Dolly Parton and her famous song like 9-5.
-    It is very important to remember her songs bc she is one of the biggest POP stars whom were famous from making Country music.
-    What else coule we talk about? I think XORs,XOR is very interesing operation on bytes/bits that allows us using stream ciphers on Counter/Galois-Counter Modes of operation in block ciphers.
-    Moreover interesing mode is AES-XTS which uses xex(XOR-Encrypt-XOR) which is kinda interesting bc it manipulates bits in that way that some simple bit-flipping is harder to perform."""
+class Algo14Tab(TabTemplate):
+    def __init__(self):
+        super().__init__()
+        
+        # 1. Użycie nowej funkcji customize_ui do zmiany tekstów dla tego algorytmu!
+        help_text = (
+            "HMAC Watermarking Algorithm\n\n"
+            "EMBEDDING:\n"
+            "1. Enter the base text in 'Cover Text'.\n"
+            "2. Enter the message you want to sign in 'Message to Sign'.\n"
+            "3. Enter your secret key.\n"
+            "4. Click 'Embed Watermark'. The generated HMAC will be hidden in the text.\n\n"
+            "EXTRACTION:\n"
+            "1. Paste the watermarked text into the 'Cover Text' field.\n"
+            "2. Click 'Extract Watermark' to retrieve the HMAC hex string."
+        )
 
-    hamak = HMAC.new(key, digestmod=SHA3_256)
-    hamak.update(message)
+        self.customize_ui(
+            cover_lbl="Cover Text",
+            secret_lbl="Message to Sign",
+            key_lbl="HMAC Key",
+            embed_btn="Embed Watermark",
+            extract_btn="Extract Watermark",
+            output_grp="Watermark Output",
+            tab_help_text=help_text
+        )
 
-    mac_bytes = hamak.digest()
-    payload_size_bits = len(mac_bytes) * 8
-    hex_chars_len = len(mac_bytes) * 2
+        # 2. Podpięcie przycisków pod metody
+        self.embed_button.clicked.connect(self.do_embed)
+        self.extract_button.clicked.connect(self.do_extract)
 
-    print(f"0x{mac_bytes.hex()}")
+    def do_embed(self):
+        text = self.covertext_input.toPlainText()
+        msg = self.secret_input.toPlainText().encode('utf-8')
+        key = self.key_input.text().encode('utf-8')
 
-    watermark_bits = "".join(f"{b:08b}" for b in mac_bytes)
+        if not text or not msg or not key:
+            QMessageBox.warning(self, "Error", "All fields (Text, Message, and Key) must be filled!")
+            return
 
-    text_with_watermark = embed_watermark(long_text, watermark_bits)
-    print(text_with_watermark)
+        try:
+            # Generowanie HMAC SHA3_256
+            hamak = HMAC.new(key, digestmod=SHA3_256)
+            hamak.update(msg)
+            mac_bytes = hamak.digest()
+            
+            # Zamiana na bity
+            watermark_bits = "".join(f"{b:08b}" for b in mac_bytes)
+            
+            # Osadzanie
+            text_with_watermark = embed_watermark(text, watermark_bits)
+            
+            # Informacja dla użytkownika w logu (opcjonalnie)
+            original_hex = f"0x{mac_bytes.hex()}"
+            result_display = f"--- Original HMAC (Hex) ---\n{original_hex}\n\n--- Watermarked Text ---\n{text_with_watermark}"
+            
+            self.result_output.setPlainText(result_display)
 
-    watermark_new = extract_watermark(text_with_watermark, payload_size=payload_size_bits)
-    watermark_bits_new = f"0x{int(watermark_new, 2):0{hex_chars_len}x}"
-    print(watermark_bits_new)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An error occurred: {str(e)}")
+
+    def do_extract(self):
+        # Do ekstrakcji bierzemy tekst z pola covertext (zakładamy, że user tam wkleił oznaczony tekst)
+        watermarked_text = self.covertext_input.toPlainText()
+        
+        if not watermarked_text:
+            QMessageBox.warning(self, "Error", "Please paste the watermarked text into the 'Cover Text' field.")
+            return
+
+        try:
+            # HMAC SHA3_256 daje zawsze 32 bajty = 256 bitów.
+            payload_size_bits = 256 
+            hex_chars_len = payload_size_bits // 4
+            
+            watermark_new_bits = extract_watermark(watermarked_text, payload_size=payload_size_bits)
+            
+            if len(watermark_new_bits) < payload_size_bits:
+                QMessageBox.warning(self, "Warning", "Could not extract full 256 bits. The text might be too short or not watermarked properly.")
+
+            # Jeśli udało się wyciągnąć jakiekolwiek bity
+            if watermark_new_bits:
+                watermark_hex = f"0x{int(watermark_new_bits, 2):0{hex_chars_len}x}"
+            else:
+                watermark_hex = "No watermark detected."
+                
+            result_display = f"--- Extracted Watermark (HMAC Hex) ---\n{watermark_hex}"
+            self.result_output.setPlainText(result_display)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An error occurred during extraction: {str(e)}")
