@@ -64,13 +64,10 @@ def compress_message(secret_message, key):
 
 def decompress_message(mb_bits, key):
     if key and len(key.strip()) > 0:
-        try:
-            codec = HuffmanCodec.from_data(key)
-            byte_chunks = [mb_bits[i:i + 8] for i in range(0, len(mb_bits), 8) if len(mb_bits[i:i + 8]) == 8]
-            raw_bytes = bytes(int(b, 2) for b in byte_chunks)
-            return codec.decode(raw_bytes)
-        except Exception as e:
-            raise ValueError(f"Huffman decompression failed: {e}")
+        codec = HuffmanCodec.from_data(key)
+        byte_chunks = [mb_bits[i:i + 8] for i in range(0, len(mb_bits), 8) if len(mb_bits[i:i + 8]) == 8]
+        raw_bytes = bytes(int(b, 2) for b in byte_chunks)
+        return codec.decode(raw_bytes)
     else:
         return bits_to_text(mb_bits)
 
@@ -180,7 +177,7 @@ def extract(stegotext, key):
     log2_m = int(math.log2(m)) if m >= 1 else 0
     log2_lz = int(math.log2(lz))
 
-    #Divide Ts into n partitions of size m + 1
+    #Divide stegotext into n partitions of size m + 1
     part_size = m + 1 #this is the partition length AFTER embedding
     ts_parts = [stegotext[i * part_size:(i + 1) * part_size] for i in range(n)]
 
@@ -222,11 +219,34 @@ class Algo8Tab(TabTemplate):
             right_widget = splitter.widget(1)
             right_widget.layout().addWidget(self.status_label)
 
-        # Connect button triggers
-        self.embed_button.clicked.connect(self.handle_embed)
-        self.extract_button.clicked.connect(self.handle_extract)
+        help_text = (
+            "Algorithm 8: Zero-Width Character (ZWC) Text Steganography with positional coding\n\n"
+            "EMBEDDING:\n"
+            "1. Enter the cover text in 'Cover Text'.\n"
+            "2. Enter the secret message in 'Secret Message'.\n"
+            "3. (Optional) Enter a pre-shared text key for Huffman compression. Note that the key text must contain all unique characters of the secret message.\n"
+            "4. Click 'Embed Secret Message'. The resulting stegotext will appear in 'Result Output'.\n\n"
+            "EXTRACTION:\n"
+            "1. Paste the stegotext into 'Cover Text'.\n"
+            "2. Enter the same pre-shared key (if one was used during embedding).\n"
+            "3. Click 'Extract Secret Message' to retrieve the hidden text."
+        )
 
-    def handle_embed(self):
+        self.customize_ui(
+            cover_lbl="Cover Text",
+            secret_lbl="Secret Message",
+            key_lbl="Key (optional)",
+            embed_btn="Embed Secret Message",
+            extract_btn="Extract Secret Message",
+            output_grp="Result Output",
+            tab_help_text=help_text
+        )
+
+        # Connect button triggers
+        self.embed_button.clicked.connect(self.do_embed)
+        self.extract_button.clicked.connect(self.do_extract)
+
+    def do_embed(self):
         cover = self.covertext_input.toPlainText()
         secret = self.secret_input.toPlainText()
         key = self.key_input.text().strip() or None
@@ -251,7 +271,7 @@ class Algo8Tab(TabTemplate):
         except Exception as e:
             QMessageBox.critical(self, "Embedding Error", str(e))
 
-    def handle_extract(self):
+    def do_extract(self):
         key = self.key_input.text().strip() or None
         text_to_extract = self.covertext_input.toPlainText()
 

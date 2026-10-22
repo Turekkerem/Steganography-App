@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt
 from algo1 import Algo1Tab
 from algo8 import Algo8Tab
+from algo9 import Algo9Tab
 from algo14 import Algo14Tab
 
 class MainWindow(QMainWindow):
@@ -18,11 +19,13 @@ class MainWindow(QMainWindow):
         self.tab_help = QWidget()
         self.tab_algo1 = Algo1Tab()
         self.tab_algo8 = Algo8Tab()
+        self.tab_algo9 = Algo9Tab()
         self.tab_algo14 = Algo14Tab()
 
         self.tabs.addTab(self.tab_home, "Home")
         self.tabs.addTab(self.tab_algo1, "Algorithm 1")
         self.tabs.addTab(self.tab_algo8, "Algorithm 8")
+        self.tabs.addTab(self.tab_algo9, "Algorithm 9")
         self.tabs.addTab(self.tab_algo14, "Algorithm 14")
         
         self.init_home_tab()
@@ -44,6 +47,7 @@ class MainWindow(QMainWindow):
             "click on them to use different steganography methods (kiedyś damy im nazwy, ale na razie):<br>"
             "<ul>"
             "<li>Algo1</li>"
+            "<li>Algo4</li>"
             "<li>Algo8</li>"
             "<li>Algo9</li>"
             "<li>Algo12 (?)</li>"
