@@ -123,10 +123,7 @@ def extract(covertext: str, payload_input: str, key_str: str) -> Tuple[str, list
     if len(clean_hex) < 32:  # at least 12 bytes IV (24 hex) + 4 bytes index (8 hex)
         raise ValueError("The hex string is too short.")
 
-    try:
-        payload_bytes = bytes.fromhex(clean_hex)
-    except ValueError as e:
-        raise ValueError(f"Failed to parse payload: {e}")
+    payload_bytes = bytes.fromhex(clean_hex)
 
     #separate the iv and the ciphertext
     iv = payload_bytes[:12]

@@ -65,6 +65,7 @@ def compress_message(secret_message, key):
 def decompress_message(mb_bits, key):
     if key and len(key.strip()) > 0:
         codec = HuffmanCodec.from_data(key)
+        #convert the binary string to bytes
         byte_chunks = [mb_bits[i:i + 8] for i in range(0, len(mb_bits), 8) if len(mb_bits[i:i + 8]) == 8]
         raw_bytes = bytes(int(b, 2) for b in byte_chunks)
         return codec.decode(raw_bytes)
