@@ -2,6 +2,7 @@ import sys
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt
 from algo1 import Algo1Tab
+from algo4 import Algo4Tab
 from algo8 import Algo8Tab
 from algo9 import Algo9Tab
 from algo14 import Algo14Tab
@@ -18,12 +19,14 @@ class MainWindow(QMainWindow):
         self.tab_home = QWidget()
         self.tab_help = QWidget()
         self.tab_algo1 = Algo1Tab()
+        self.tab_algo4 = Algo4Tab()
         self.tab_algo8 = Algo8Tab()
         self.tab_algo9 = Algo9Tab()
         self.tab_algo14 = Algo14Tab()
 
         self.tabs.addTab(self.tab_home, "Home")
         self.tabs.addTab(self.tab_algo1, "Algorithm 1")
+        self.tabs.addTab(self.tab_algo4, "Algorithm 4")
         self.tabs.addTab(self.tab_algo8, "Algorithm 8")
         self.tabs.addTab(self.tab_algo9, "Algorithm 9")
         self.tabs.addTab(self.tab_algo14, "Algorithm 14")
