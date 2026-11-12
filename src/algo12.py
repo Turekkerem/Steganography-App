@@ -33,11 +33,13 @@ class MarkovStego:
         if not self.model:
             raise ValueError("Markov chain is not initialized!")
             
-        # Store message length as prefix
-        msg = f"{len(secret_message)}|" + secret_message
-        binary = ''.join(f'{ord(c):08b}' for c in msg)
+        # PEŁNE WSPARCIE UNICODE (UTF-8)
+        msg_bytes = secret_message.encode('utf-8')
+        prefix_bytes = f"{len(msg_bytes)}|".encode('utf-8')
+        full_payload = prefix_bytes + msg_bytes
         
-        # Pad binary sequence to a multiple of L[cite: 3]
+        binary = ''.join(f'{b:08b}' for b in full_payload)
+        
         if len(binary) % L != 0:
             binary += '0' * (L - (len(binary) % L))
         blocks = [int(binary[i:i+L], 2) for i in range(0, len(binary), L)]
@@ -90,7 +92,9 @@ class MarkovStego:
                 else:
                     state = tuple(list(state[1:]) + [chosen_word])
 
-        # Phase 2: Naturally finish the sentence (to avoid sudden cuts)
+        random.seed(secret_message)
+
+        # Phase 2: Naturally finish the sentence
         tail_word_count = 0
         while tail_word_count < 50:
             if state not in self.model:
@@ -112,12 +116,13 @@ class MarkovStego:
 
         if tail_word_count >= 50 and generated_tokens[-1] != END:
             generated_tokens.append(END)
+            
+        random.seed() 
 
-        # Phase 3: Hide END tokens and format esthetic text
+        # Phase 3: Format text
         output_tokens = []
         for token in generated_tokens:
             if token == END:
-                # Convert END token into a dot attached to the previous word
                 if output_tokens and not output_tokens[-1].endswith('.'):
                     output_tokens[-1] += "."
                 else:
@@ -135,8 +140,9 @@ class MarkovStego:
         state = (BEGIN,) * self.state_size
         
         binary_stream = ""
-        decoded_text = ""
-        msg_length = None
+        extracted_bytes = bytearray()
+        msg_byte_length = None
+        prefix_size = 0
 
         low = Fraction(0)
         high = Fraction(2**L)
@@ -150,18 +156,14 @@ class MarkovStego:
                 state = (BEGIN,) * self.state_size
             
             choices_dict = self.model.get(state, {END: 1})
-            
             target_word = raw_word
             
-            # Smart END token recovery based on Markov graph context
             if raw_word == ".":
                 target_word = END
             elif raw_word.endswith('.'):
                 clean = raw_word[:-1]
-                # If the word with dot is NOT in the graph, but the clean version is:
                 if raw_word not in choices_dict and clean in choices_dict:
                     target_word = clean
-                    # Put the borrowed END token back into the processing queue
                     words_to_process.insert(word_idx + 1, END)
 
             choices = sorted(choices_dict.items())
@@ -195,46 +197,54 @@ class MarkovStego:
                 
             word_idx += 1
             
-            # Extract data when the interval narrows down to a single integer[cite: 3]
             k = int(low)
             if high <= Fraction(k + 1):
                 binary_stream += f'{k:0{L}b}'
                 low = Fraction(0)
                 high = Fraction(2**L)
                 
-                # Reconstruct ASCII text
                 while len(binary_stream) >= 8:
-                    char = chr(int(binary_stream[:8], 2))
+                    extracted_bytes.append(int(binary_stream[:8], 2))
                     binary_stream = binary_stream[8:]
-                    decoded_text += char
                     
-                    if msg_length is None and '|' in decoded_text:
-                        parts = decoded_text.split('|', 1)
+                    if msg_byte_length is None and b'|' in extracted_bytes:
+                        parts = extracted_bytes.split(b'|', 1)
                         try:
-                            msg_length = int(parts[0])
-                            decoded_text = parts[1]
+                            msg_byte_length = int(parts[0].decode('ascii'))
+                            prefix_size = len(parts[0]) + 1
                         except ValueError:
                             pass
                             
-                    if msg_length is not None and len(decoded_text) >= msg_length:
-                        return decoded_text 
+                    if msg_byte_length is not None:
+                        if len(extracted_bytes) >= prefix_size + msg_byte_length:
+                            payload = extracted_bytes[prefix_size : prefix_size + msg_byte_length]
+                            return payload.decode('utf-8', errors='replace')
 
 
 class AlgoMarkovTab(TabTemplate):
     def __init__(self):
         super().__init__()
         
+        self.result_output.setReadOnly(True)
+        self.result_output.setPlaceholderText("Results will appear here...")
+        
+        # Poprawione nazewnictwo interfejsu
         self.customize_ui(
             cover_lbl="Markov Model Status",
-            secret_lbl="Secret Message",
+            secret_lbl="Secret Msg (Hide) / Stegano Text (Decode)",
+            key_lbl="Key (N/A for this method)",
             embed_btn="Generate Steganogram",
             extract_btn="Extract Data",
             tab_help_text=(
-                "1. Generate a Markov chain from a TXT file (might take a while).\n"
-                "2. (Optional) Save the model to a JSON file to save RAM.\n"
-                "3. Enter a secret message and click 'Generate Steganogram'."
+                "1. Load Markov chain from JSON or TXT file.\n"
+                "2. TO HIDE: Enter secret message in the middle text box and click 'Generate'.\n"
+                "3. TO EXTRACT: Paste steganographic text into the middle text box and click 'Extract'."
             )
         )
+        
+        # Zablokowanie niepotrzebnego klucza w tym algorytmie
+        self.key_input.setEnabled(False)
+        self.key_input.setPlaceholderText("Not used in Markov Steganography")
 
         self.btn_gen_model = QPushButton("Generate markov chain from text file")
         self.btn_save_model = QPushButton("Save markov chain to JSON file")
@@ -308,24 +318,28 @@ class AlgoMarkovTab(TabTemplate):
             QMessageBox.information(self, "Success", "Markov model successfully restored from JSON!")
 
     def do_embed(self):
+        # Pobieranie wpisanej tajnej wiadomości ze środkowego pola input
         secret = self.secret_input.toPlainText()
         if not secret:
-            QMessageBox.warning(self, "Error", "Please enter a message to hide.")
+            QMessageBox.warning(self, "Error", "Please enter a message to hide in the 'Secret Msg' field.")
             return
         try:
             stego_text = self.stego.encode(secret, L=3)
+            # Wynik wypluwamy w polu z prawej strony (ReadOnly)
             self.result_output.setPlainText(stego_text)
         except Exception as e:
             QMessageBox.critical(self, "Generation Error", str(e))
 
     def do_extract(self):
-        stego_text = self.result_output.toPlainText()
+        # Pobieranie steganogramu DO ODKODOWANIA z pola input (zamiast z pustego okna result)
+        stego_text = self.secret_input.toPlainText()
         if not stego_text:
-            QMessageBox.warning(self, "Error", "Please paste the steganographic text into the result window.")
+            QMessageBox.warning(self, "Error", "Please paste the steganographic text into the 'Secret Msg / Stegano Text' field.")
             return
+            
         try:
             secret = self.stego.decode(stego_text, L=3)
-            # Wyświetlanie sekretu bezpośrednio w prawym oknie zamiast w MessageBox
+            # Zdekodowany sekret wyrzucamy z prawej strony
             self.result_output.setPlainText(f"--- EXTRACTED SECRET MESSAGE ---\n\n{secret}")
         except Exception as e:
             QMessageBox.critical(self, "Extraction Error", str(e))

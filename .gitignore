@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 venv/
 .env
+*.txt
+data/download_dataset.py
+data/d.py

@@ -6,12 +6,12 @@ from algo4 import Algo4Tab
 from algo8 import Algo8Tab
 from algo9 import Algo9Tab
 from algo14 import Algo14Tab
-
+from algo12 import AlgoMarkovTab
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Steganography Project - Adam Bojek, Kerem Özdoğan")
-        self.resize(1200, 800)
+        self.resize(1900, 800)
 
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -23,14 +23,14 @@ class MainWindow(QMainWindow):
         self.tab_algo8 = Algo8Tab()
         self.tab_algo9 = Algo9Tab()
         self.tab_algo14 = Algo14Tab()
-
+        self.tab_algo12 = AlgoMarkovTab()
         self.tabs.addTab(self.tab_home, "Home")
         self.tabs.addTab(self.tab_algo1, "Algorithm 1")
         self.tabs.addTab(self.tab_algo4, "Algorithm 4")
         self.tabs.addTab(self.tab_algo8, "Algorithm 8")
         self.tabs.addTab(self.tab_algo9, "Algorithm 9")
         self.tabs.addTab(self.tab_algo14, "Algorithm 14")
-        
+        self.tabs.addTab(self.tab_algo12, "Algorithm 12")
         self.init_home_tab()
 
     def init_home_tab(self):

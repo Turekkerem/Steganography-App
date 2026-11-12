@@ -1,0 +1,1 @@
+{"state_size": 1, "chain": "[[[\"___BEGIN__\"], {\"example1\": 1}], [[\"example1\"], {\"example2\": 1}], [[\"example2\"], {\"___END__\": 1}]]", "parsed_sentences": [["example1", "example2"]]}
