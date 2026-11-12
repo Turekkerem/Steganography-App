@@ -42,6 +42,20 @@ SPACES = set(CONFUSABLE_SPACES)
 SPACE_TO_BITS = {space_char: f"{idx:03b}" for idx, space_char in enumerate(CONFUSABLE_SPACES)}
 
 
+def calculate_capacity(text: str) -> int:
+    """
+    Oblicza pojemność cover textu (w bitach).
+    Spacje pozwalają ukryć 3 bity, a znaki z listy ORIGINALS po 1 bicie.
+    """
+    capacity = 0
+    for c in text:
+        if c in SPACES:
+            capacity += 3
+        elif c in ORIGINALS:
+            capacity += 1
+    return capacity
+
+
 def embed_watermark(text: str, watermark_bits: str) -> str:
     watermarked_text = []
     w_idx = 0
@@ -98,7 +112,6 @@ class Algo14Tab(TabTemplate):
     def __init__(self):
         super().__init__()
         
-        # 1. Użycie nowej funkcji customize_ui do zmiany tekstów dla tego algorytmu!
         help_text = (
             "HMAC Watermarking Algorithm\n\n"
             "EMBEDDING:\n"
@@ -106,13 +119,14 @@ class Algo14Tab(TabTemplate):
             "2. Enter the message you want to sign in 'Message to Sign'.\n"
             "3. Enter your secret key.\n"
             "4. Click 'Embed Watermark'. The generated HMAC will be hidden in the text.\n\n"
-            "EXTRACTION:\n"
+            "EXTRACTION & VERIFICATION:\n"
             "1. Paste the watermarked text into the 'Cover Text' field.\n"
-            "2. Click 'Extract Watermark' to retrieve the HMAC hex string."
+            "2. Enter the original 'Message to Sign' and 'HMAC Key' used for embedding.\n"
+            "3. Click 'Extract Watermark' to retrieve the HMAC and verify if the text is authentic."
         )
 
         self.customize_ui(
-            cover_lbl="Cover Text",
+            cover_lbl="Cover / Watermarked Text",
             secret_lbl="Message to Sign",
             key_lbl="HMAC Key",
             embed_btn="Embed Watermark",
@@ -121,7 +135,6 @@ class Algo14Tab(TabTemplate):
             tab_help_text=help_text
         )
 
-        # 2. Podpięcie przycisków pod metody
         self.embed_button.clicked.connect(self.do_embed)
         self.extract_button.clicked.connect(self.do_extract)
 
@@ -143,10 +156,23 @@ class Algo14Tab(TabTemplate):
             # Zamiana na bity
             watermark_bits = "".join(f"{b:08b}" for b in mac_bytes)
             
+            # --- SPRAWDZENIE POJEMNOŚCI ---
+            capacity = calculate_capacity(text)
+            if capacity < len(watermark_bits):
+                QMessageBox.warning(
+                    self, 
+                    "Error", 
+                    f"Cover text is too short!\n\n"
+                    f"Available capacity: {capacity} bits\n"
+                    f"Required capacity: {len(watermark_bits)} bits.\n\n"
+                    "Please provide a longer cover text."
+                )
+                return
+            # ------------------------------
+            
             # Osadzanie
             text_with_watermark = embed_watermark(text, watermark_bits)
             
-            # Informacja dla użytkownika w logu (opcjonalnie)
             original_hex = f"0x{mac_bytes.hex()}"
             result_display = f"--- Original HMAC (Hex) ---\n{original_hex}\n\n--- Watermarked Text ---\n{text_with_watermark}"
             
@@ -156,31 +182,75 @@ class Algo14Tab(TabTemplate):
             QMessageBox.critical(self, "Error", f"An error occurred: {str(e)}")
 
     def do_extract(self):
-        # Do ekstrakcji bierzemy tekst z pola covertext (zakładamy, że user tam wkleił oznaczony tekst)
         watermarked_text = self.covertext_input.toPlainText()
+        msg = self.secret_input.toPlainText().encode('utf-8')
+        key = self.key_input.text().encode('utf-8')
         
         if not watermarked_text:
             QMessageBox.warning(self, "Error", "Please paste the watermarked text into the 'Cover Text' field.")
             return
 
+        # Do weryfikacji potrzebujemy klucza i wiadomości bazowej
+        if not msg or not key:
+            QMessageBox.warning(self, "Error", "To verify the watermark, both 'Message to Sign' and 'HMAC Key' must be provided.")
+            return
+
         try:
-            # HMAC SHA3_256 daje zawsze 32 bajty = 256 bitów.
+            # Obliczenie oczekiwanego HMAC na podstawie wpisanej wiadomości i klucza
+            hamak = HMAC.new(key, digestmod=SHA3_256)
+            hamak.update(msg)
+            expected_mac_bytes = hamak.digest()
+            expected_hex = f"0x{expected_mac_bytes.hex()}"
+
+            # Ekstrakcja
             payload_size_bits = 256 
             hex_chars_len = payload_size_bits // 4
             
             watermark_new_bits = extract_watermark(watermarked_text, payload_size=payload_size_bits)
             
             if len(watermark_new_bits) < payload_size_bits:
-                QMessageBox.warning(self, "Warning", "Could not extract full 256 bits. The text might be too short or not watermarked properly.")
+                QMessageBox.warning(self, "Warning", "Could not extract full 256 bits. The text might be too short or has been altered.")
 
-            # Jeśli udało się wyciągnąć jakiekolwiek bity
             if watermark_new_bits:
-                watermark_hex = f"0x{int(watermark_new_bits, 2):0{hex_chars_len}x}"
+                extracted_hex = f"0x{int(watermark_new_bits, 2):0{hex_chars_len}x}"
             else:
-                watermark_hex = "No watermark detected."
+                extracted_hex = "No watermark detected."
                 
-            result_display = f"--- Extracted Watermark (HMAC Hex) ---\n{watermark_hex}"
+            # --- WERYFIKACJA ---
+            if watermark_new_bits and extracted_hex == expected_hex:
+                verification_status = "✅ SUCCESS: The extracted watermark perfectly matches the expected HMAC!"
+            else:
+                verification_status = "❌ FAILURE: The extracted watermark DOES NOT match. The text, message, or key has been altered!"
+
+            result_display = (
+                f"--- Extracted Watermark (HMAC Hex) ---\n{extracted_hex}\n\n"
+                f"--- Expected Watermark (HMAC Hex) ---\n{expected_hex}\n\n"
+                f"--- Verification Status ---\n{verification_status}"
+            )
+            
             self.result_output.setPlainText(result_display)
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"An error occurred during extraction: {str(e)}")
+
+EXAMPLE_TEXT="""Civil calm minds decide; kindly local clerks collect simple vivid examples. C and D; K and L; M and V; X and x. David and Jill like classic little villages, vivid colors, and simple daily checks. Civic clubs collect clean copies; local kids discuss calm ideas. C and D; K and L; M and V; X and x. c; d; i; j; l; v; x. Well-known local clubs keep simple day-to-day checks; civil minds decide calmly. David and Jill collect vivid little examples; kindly clerks discuss local jobs. C and D; K and L; M and V; X and x."""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+EXAMPLE_OUTPUT="""--- Original HMAC (Hex) ---
+0xb2c917b1e08b96ad5f13824aadbe043441a124f271696822ccdb9c520b0e53e9
+
+--- Watermarked Text ---
+Ⅽiⅴⅰl ⅽaⅼm minds deⅽiⅾe; kⅰnⅾly ⅼoⅽaⅼ clerks coⅼleⅽt simpⅼe vⅰvⅰd eⅹamples. Ⅽ and D; K and Ⅼ; Ⅿ anⅾ V; Ⅹ and x. Daviⅾ and Jill ⅼike classⅰc lⅰttle ⅴⅰllages, ⅴⅰⅴid ⅽoⅼors, and sⅰmple daily cheⅽks. Ciⅴⅰc cⅼubs ⅽoⅼlect clean ⅽopies; local kⅰds ⅾⅰsⅽuss caⅼm ⅰⅾeas. Ⅽ and D; K and L; M and V; X and x. c; d; i; j; l; v; x. Well-known local clubs keep simple day-to-day checks; civil minds decide calmly. David and Jill collect vivid little examples; kindly clerks discuss local jobs. C and D; K and L; M and V; X and x."""
