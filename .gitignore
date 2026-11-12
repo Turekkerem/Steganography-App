@@ -5,3 +5,7 @@ venv/
 *.txt
 data/download_dataset.py
 data/d.py
+data/Doctor Who/download_doctor_who_12.py
+data/Inne/skrypt.py
+data/Inne/model_blok.json
+data/full_data.csv
