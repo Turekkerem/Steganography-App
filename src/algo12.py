@@ -22,9 +22,12 @@ class MarkovStego:
             self.model = {}
 
     def load_from_json(self, json_str):
-        self.text_model = markovify.Text.from_json(json_str)
-        self.state_size = self.text_model.state_size
-        self.model = self.text_model.chain.model
+        loaded_model = markovify.Text.from_json(json_str)
+        if not loaded_model.chain.model:
+            raise ValueError("Loaded JSON file contains an empty Markov model.")
+        self.text_model = loaded_model
+        self.state_size = loaded_model.state_size
+        self.model = loaded_model.chain.model
 
     def to_json(self):
         if self.text_model:
@@ -55,34 +58,34 @@ class MarkovStego:
 
         def match_word(w1, w2):
             if ignore_punct:
-                # Ignorowanie interpunkcji i wielkości liter dla łatwego wyszukiwania klucza
                 c1 = w1.translate(str.maketrans('', '', string.punctuation)).lower()
                 c2 = w2.translate(str.maketrans('', '', string.punctuation)).lower()
                 return c1 == c2
             return w1.lower() == w2.lower()
 
         def match_tuple(t1, t2):
-            if len(t1) != len(t2): return False
+            if len(t1) != len(t2):
+                return False
             return all(match_word(w1, w2) for w1, w2 in zip(t1, t2))
 
-        # 1. Dokładne dopasowanie długości[cite: 5, 11]
+        # 1. Exact length match
         if len(key_words) == self.state_size:
             for state in sorted(self.model.keys(), key=lambda x: str(x)):
                 if match_tuple(state, tuple(key_words)):
                     return state
 
-        # 2. Mniej słów niż rząd modelu[cite: 11]
+        # 2. Fewer words than Markov order
         if len(key_words) < self.state_size:
-            # Szukanie na początku zdania
+            # Search at sentence start first
             for state in sorted(self.model.keys(), key=lambda x: str(x)):
                 if state[0] == BEGIN and match_tuple(state[self.state_size - len(key_words):], tuple(key_words)):
                     return state
-            # Szukanie na końcu stanu
+            # Search at the suffix of any state
             for state in sorted(self.model.keys(), key=lambda x: str(x)):
                 if match_tuple(state[-len(key_words):], tuple(key_words)):
                     return state
 
-        # 3. Więcej słów -> bierzemy ogon o długości state_size[cite: 11]
+        # 3. More words than Markov order -> take trailing slice of length state_size
         target_slice = tuple(key_words[-self.state_size:])
         for state in sorted(self.model.keys(), key=lambda x: str(x)):
             if match_tuple(state, target_slice):
@@ -98,6 +101,8 @@ class MarkovStego:
     def encode(self, secret_message, L=3, stego_key="", ignore_punct=True):
         if not self.model:
             raise ValueError("Markov chain is not initialized!")
+        if L < 1:
+            raise ValueError("Bit block length L must be at least 1.")
 
         msg_bytes = secret_message.encode('utf-8')
         prefix_bytes = f"{len(msg_bytes)}|".encode('utf-8')
@@ -107,15 +112,15 @@ class MarkovStego:
 
         if len(binary) % L != 0:
             binary += '0' * (L - (len(binary) % L))
-        blocks = [int(binary[i:i+L], 2) for i in range(0, len(binary), L)]
+        blocks = [int(binary[i:i + L], 2) for i in range(0, len(binary), L)]
 
         state = self.resolve_key_state(stego_key, ignore_punct)
         generated_tokens = []
 
-        # Phase 1: Kodowanie arytmetyczne[cite: 11]
+        # Phase 1: Arithmetic coding over Markov transition probabilities
         for m in blocks:
             low = Fraction(0)
-            high = Fraction(2**L)
+            high = Fraction(2 ** L)
             target = Fraction(m) + Fraction(1, 2)
 
             iterations = 0
@@ -157,42 +162,40 @@ class MarkovStego:
                 else:
                     state = tuple(list(state[1:]) + [chosen_word])
 
+        # Phase 2: Natural sentence completion (camouflage tail)
         random.seed(f"{stego_key}|{secret_message}")
+        try:
+            tail_word_count = 0
+            while tail_word_count < 50:
+                if state not in self.model:
+                    break
+                choices_dict = self.model.get(state, {END: 1})
+                if not choices_dict:
+                    break
 
-        # Phase 2: Dokończenie zdania w celu kamuflażu[cite: 11]
-        tail_word_count = 0
-        while tail_word_count < 50:
-            if state not in self.model:
-                break
-            choices_dict = self.model.get(state, {END: 1})
-            if not choices_dict:
-                break
+                sorted_choices = sorted(choices_dict.items())
+                words = [c[0] for c in sorted_choices]
+                weights = [c[1] for c in sorted_choices]
 
-            sorted_choices = sorted(choices_dict.items())
-            words = [c[0] for c in sorted_choices]
-            weights = [c[1] for c in sorted_choices]
-            
-            best_word = random.choices(words, weights=weights, k=1)[0]
+                best_word = random.choices(words, weights=weights, k=1)[0]
 
-            generated_tokens.append(best_word)
-            if best_word == END:
-                break
+                generated_tokens.append(best_word)
+                if best_word == END:
+                    break
 
-            state = tuple(list(state[1:]) + [best_word])
-            tail_word_count += 1
+                state = tuple(list(state[1:]) + [best_word])
+                tail_word_count += 1
 
-        if tail_word_count >= 50 and generated_tokens[-1] != END:
-            generated_tokens.append(END)
+            if tail_word_count >= 50 and generated_tokens and generated_tokens[-1] != END:
+                generated_tokens.append(END)
+        finally:
+            random.seed()
 
-        random.seed()
-
-        # Phase 3: Złożenie tekstu z bezbłędnym pozbyciem się "dziwnych kropek"[cite: 11]
+        # Phase 3: Assemble output text attaching sentence-ending dots cleanly
         output_tokens = []
         for token in generated_tokens:
             if token == END:
                 if output_tokens:
-                    # Zamiast wstawiać samotną kropkę lub robić spację przed kropką,
-                    # ZAWSZE dopisujemy ją do ostatniego wygenerowanego słowa na twardo.
                     output_tokens[-1] += "."
                 else:
                     output_tokens.append(".")
@@ -202,9 +205,14 @@ class MarkovStego:
         return " ".join(output_tokens)
 
     def decode(self, stego_text, L=3, stego_key="", ignore_punct=True):
-        words_to_process = []
-        for raw_word in stego_text.split():
-            words_to_process.append(raw_word)
+        if not self.model:
+            raise ValueError("Markov chain is not initialized!")
+        if L < 1:
+            raise ValueError("Bit block length L must be at least 1.")
+
+        words_to_process = list(stego_text.split())
+        if not words_to_process:
+            raise ValueError("Steganographic text is empty.")
 
         state = self.resolve_key_state(stego_key, ignore_punct)
 
@@ -214,7 +222,7 @@ class MarkovStego:
         prefix_size = 0
 
         low = Fraction(0)
-        high = Fraction(2**L)
+        high = Fraction(2 ** L)
 
         word_idx = 0
 
@@ -227,8 +235,7 @@ class MarkovStego:
             choices_dict = self.model.get(state, {END: 1})
             target_word = raw_word
 
-            # Inteligentny dekoder: ściąga po jednej kropce z końca, by sprawdzić
-            # czy ukryto tam znacznik END
+            # Strip trailing dot if it encodes an END token
             if raw_word == ".":
                 target_word = END
             elif raw_word.endswith('.'):
@@ -256,9 +263,9 @@ class MarkovStego:
 
             if not found:
                 raise ValueError(
-                    f"Graph desynchronization. Incorrect key or wrong text.\n"
+                    f"Graph desynchronization. Incorrect key, wrong Block L, or corrupted text.\n"
                     f"Looked for word: '{target_word}' for state: {state}\n"
-                    f"Available words in this node are: {list(choices_dict.keys())[:5]}"
+                    f"Available words in this node: {list(choices_dict.keys())[:5]}"
                 )
 
             if target_word == END:
@@ -267,24 +274,30 @@ class MarkovStego:
                 state = tuple(list(state[1:]) + [target_word])
 
             word_idx += 1
-            
+
             k = int(low)
             if high <= Fraction(k + 1):
                 binary_stream += f'{k:0{L}b}'
                 low = Fraction(0)
-                high = Fraction(2**L)
+                high = Fraction(2 ** L)
 
                 while len(binary_stream) >= 8:
                     extracted_bytes.append(int(binary_stream[:8], 2))
                     binary_stream = binary_stream[8:]
 
-                    if msg_byte_length is None and b'|' in extracted_bytes:
-                        parts = extracted_bytes.split(b'|', 1)
-                        try:
-                            msg_byte_length = int(parts[0].decode('ascii'))
-                            prefix_size = len(parts[0]) + 1
-                        except ValueError:
-                            pass
+                    if msg_byte_length is None:
+                        if b'|' in extracted_bytes:
+                            parts = extracted_bytes.split(b'|', 1)
+                            try:
+                                parsed_len = int(parts[0].decode('ascii'))
+                                if parsed_len < 0:
+                                    raise ValueError("Invalid negative message length.")
+                                msg_byte_length = parsed_len
+                                prefix_size = len(parts[0]) + 1
+                            except (ValueError, UnicodeDecodeError):
+                                raise ValueError("Corrupted steganogram header or incorrect key / Block L.")
+                        elif len(extracted_bytes) > 16:
+                            raise ValueError("Header delimiter not found. Incorrect key, Block L, or model.")
 
                     if msg_byte_length is not None:
                         if len(extracted_bytes) >= prefix_size + msg_byte_length:
@@ -292,6 +305,24 @@ class MarkovStego:
                             return payload.decode('utf-8', errors='replace')
 
         raise ValueError("End of steganogram reached before full message could be extracted (incomplete text or wrong key).")
+
+    @staticmethod
+    def compute_stats(secret_message, stego_text):
+        """Computes container metrics described in Shniperov & Nikitina (2016)."""
+        words = stego_text.split()
+        volume_v = len(words)
+        unique_d = len(set(w.lower() for w in words))
+        repeatability_r = (volume_v / unique_d) if unique_d > 0 else 0.0
+        secret_bytes = len(secret_message.encode('utf-8'))
+        container_bytes = len(stego_text.encode('utf-8'))
+        capacity_pct = (secret_bytes / container_bytes * 100.0) if container_bytes > 0 else 0.0
+        return {
+            "words": volume_v,
+            "unique": unique_d,
+            "repeatability": repeatability_r,
+            "secret_bytes": secret_bytes,
+            "capacity_pct": capacity_pct,
+        }
 
 
 class AlgoMarkovTab(TabTemplate):
@@ -308,38 +339,50 @@ class AlgoMarkovTab(TabTemplate):
             embed_btn="Generate Steganogram",
             extract_btn="Extract Data",
             tab_help_text=(
-                "1. Select Markov Chain Order (1, 2, or 3).\n"
-                "2. Load Markov chain from JSON or TXT file.\n"
+                "1. Select Markov Chain Order (1, 2, or 3) and Bit Block Size L (2-5).\n"
+                "2. Load a Markov chain from a JSON or TXT file (or use the built-in test dictionary).\n"
                 "3. (Optional) Enter 1 to N starting words as a Key (must exist in the model).\n"
-                "4. TO HIDE: Enter secret message and click 'Generate Steganogram'.\n"
-                "5. TO EXTRACT: Paste steganographic text, enter the SAME Key, and click 'Extract Data'."
+                "4. TO HIDE: Enter your secret message and click 'Generate Steganogram'.\n"
+                "5. TO EXTRACT: Paste the exact steganographic text, set the SAME Order, Block L, and Key, then click 'Extract Data'."
             )
         )
 
         self.key_input.setEnabled(True)
         self.key_input.setPlaceholderText("e.g. 'The' (Order 1) or 'The capacity' (Order 2)")
 
+        # Model file buttons
         self.btn_gen_model = QPushButton("Generate from TXT")
         self.btn_use_model = QPushButton("Load from JSON")
         self.btn_save_model = QPushButton("Save to JSON")
 
+        # Parameters layout (Order, Block L, Ignore Punctuation)
         self.order_layout = QHBoxLayout()
         self.order_label = QLabel("Markov Order:")
         self.order_label.setStyleSheet("font-weight: bold;")
-        
+
         self.order_combo = QComboBox()
         self.order_combo.addItems(["1", "2", "3"])
-        self.order_combo.setToolTip("Order 1: High Capacity, Low Naturalness\nOrder 3: Low Capacity, High Naturalness")
-        
-        # Nowy CheckBox do ignorowania interpunkcji w słowach kluczowych
+        self.order_combo.setToolTip("Order 1: High Capacity, Lower Naturalness\nOrder 3: Low Capacity, High Naturalness")
+
+        self.block_l_label = QLabel("Block L:")
+        self.block_l_label.setStyleSheet("font-weight: bold;")
+
+        self.block_l_combo = QComboBox()
+        self.block_l_combo.addItems(["2", "3", "4", "5"])
+        self.block_l_combo.setCurrentText("3")
+        self.block_l_combo.setToolTip("Bit block size L (must match between embedding and extraction)")
+
         self.ignore_punct_cb = QCheckBox("Ignore Punctuation in Key")
         self.ignore_punct_cb.setChecked(True)
         self.ignore_punct_cb.setToolTip("Matches 'John' with 'John:', '\"John', etc.")
 
         self.order_layout.addWidget(self.order_label)
         self.order_layout.addWidget(self.order_combo)
+        self.order_layout.addWidget(self.block_l_label)
+        self.order_layout.addWidget(self.block_l_combo)
         self.order_layout.addWidget(self.ignore_punct_cb)
 
+        # Rebuild action_group layout cleanly
         old_layout = self.action_group.layout()
         if old_layout is not None:
             old_layout.removeWidget(self.embed_button)
@@ -363,20 +406,40 @@ class AlgoMarkovTab(TabTemplate):
 
         self.action_group.setLayout(new_action_layout)
 
+        # Output utilities: metrics label + Copy / Save buttons
+        output_layout = self.output_group.layout()
+        self.stats_label = QLabel("Container stats: —")
+        self.stats_label.setStyleSheet("font-size: 11pt; color: #555555;")
+
+        output_btn_row = QHBoxLayout()
+        self.btn_copy_result = QPushButton("Copy Result")
+        self.btn_save_result = QPushButton("Save Result to TXT")
+        output_btn_row.addWidget(self.btn_copy_result)
+        output_btn_row.addWidget(self.btn_save_result)
+
+        output_layout.addWidget(self.stats_label)
+        output_layout.addLayout(output_btn_row)
+
+        # Connect signals
         self.btn_gen_model.clicked.connect(self.generate_model_from_file)
         self.btn_save_model.clicked.connect(self.save_model_to_json)
         self.btn_use_model.clicked.connect(self.use_model_from_file)
+        self.btn_copy_result.clicked.connect(self.copy_result_to_clipboard)
+        self.btn_save_result.clicked.connect(self.save_result_to_file)
+        self.order_combo.currentTextChanged.connect(self.on_order_changed)
 
-        default_text = (
+        # Initialize default dictionary
+        self.default_text = (
             "Digital steganography uses various hiding techniques. "
             "The capacity of hidden messages depends on text complexity. "
             "Methods using Markov chains are characterized by preserving the linguistic model. "
             "Text generated by the chain sounds relatively natural. "
         ) * 10
+        self.is_default_model = True
 
         self.covertext_input.setReadOnly(True)
 
-        self.stego = MarkovStego(text=default_text, state_size=1)
+        self.stego = MarkovStego(text=self.default_text, state_size=1)
         self.order_combo.setCurrentText("1")
         self.update_status_display("Default test dictionary")
 
@@ -387,6 +450,17 @@ class AlgoMarkovTab(TabTemplate):
             pass
         self.embed_button.clicked.connect(self.do_embed)
         self.extract_button.clicked.connect(self.do_extract)
+
+    def on_order_changed(self, new_order_str):
+        new_order = int(new_order_str)
+        if self.is_default_model:
+            self.stego = MarkovStego(text=self.default_text, state_size=new_order)
+            self.update_status_display("Default test dictionary")
+        elif self.stego.state_size != new_order:
+            self.covertext_input.setPlainText(
+                f"<< Warning: Selected Order {new_order}, but active model is Order {self.stego.state_size}. >>\n"
+                f"Click 'Generate from TXT' or 'Load from JSON' to apply Order {new_order}."
+            )
 
     def update_status_display(self, source_name):
         samples = self.stego.get_sample_keys(limit=5)
@@ -399,22 +473,48 @@ class AlgoMarkovTab(TabTemplate):
 
     def generate_model_from_file(self):
         options = QFileDialog.Options()
-        file_name, _ = QFileDialog.getOpenFileName(self, "Select text file (TXT)", "", "Text Files (*.txt);;All Files (*)", options=options)
-        if file_name:
-            self.covertext_input.setPlainText("Processing text... This may take a moment!")
-            QApplication.processEvents()
+        file_name, _ = QFileDialog.getOpenFileName(
+            self, "Select text file (TXT)", "", "Text Files (*.txt);;All Files (*)", options=options
+        )
+        if not file_name:
+            return
 
-            selected_order = int(self.order_combo.currentText())
+        self.covertext_input.setPlainText("Processing text... This may take a moment!")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
 
-            try:
-                with open(file_name, 'r', encoding='utf-8') as f:
-                    text = f.read()
+        selected_order = int(self.order_combo.currentText())
 
-                self.stego = MarkovStego(text=text, state_size=selected_order)
-                self.update_status_display(file_name)
-                QMessageBox.information(self, "Success", f"Order {selected_order} Markov chain compiled successfully!")
-            except Exception as e:
-                self.covertext_input.setPlainText(f"<< Error during model creation: {e} >>\nNote: Higher order chains require much more input text!")
+        try:
+            text = None
+            for enc in ('utf-8', 'cp1250', 'latin2'):
+                try:
+                    with open(file_name, 'r', encoding=enc) as f:
+                        text = f.read()
+                    break
+                except UnicodeDecodeError:
+                    continue
+
+            if text is None:
+                raise ValueError("Could not decode text file (supported: UTF-8, CP1250, ISO-8859-2).")
+
+            new_stego = MarkovStego(text=text, state_size=selected_order)
+            if not new_stego.model:
+                raise ValueError(
+                    f"Input text is too short to generate an Order {selected_order} Markov model."
+                )
+
+            self.stego = new_stego
+            self.is_default_model = False
+            self.update_status_display(file_name)
+            QMessageBox.information(self, "Success", f"Order {selected_order} Markov chain compiled successfully!")
+        except Exception as e:
+            self.covertext_input.setPlainText(
+                f"<< Error during model creation: {e} >>\n"
+                "Note: Higher order chains require significantly more input text!"
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def save_model_to_json(self):
         if not self.stego.model:
@@ -422,62 +522,119 @@ class AlgoMarkovTab(TabTemplate):
             return
 
         options = QFileDialog.Options()
-        file_name, _ = QFileDialog.getSaveFileName(self, "Save JSON model", "model.json", "JSON Files (*.json)", options=options)
+        file_name, _ = QFileDialog.getSaveFileName(
+            self, "Save JSON model", "model.json", "JSON Files (*.json)", options=options
+        )
         if file_name:
             json_str = self.stego.to_json()
             with open(file_name, 'w', encoding='utf-8') as f:
                 f.write(json_str)
-            QMessageBox.information(self, "Saved", f"Order {self.stego.state_size} Markov chain saved to disk.\nUsing JSON files frees up RAM.")
+            QMessageBox.information(
+                self, "Saved", f"Order {self.stego.state_size} Markov chain saved to disk."
+            )
 
     def use_model_from_file(self):
         options = QFileDialog.Options()
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open prepared JSON model", "", "JSON Files (*.json);;All Files (*)", options=options)
-        if file_name:
-            try:
-                with open(file_name, 'r', encoding='utf-8') as f:
-                    json_str = f.read()
+        file_name, _ = QFileDialog.getOpenFileName(
+            self, "Open prepared JSON model", "", "JSON Files (*.json);;All Files (*)", options=options
+        )
+        if not file_name:
+            return
 
-                self.stego.load_from_json(json_str)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            with open(file_name, 'r', encoding='utf-8') as f:
+                json_str = f.read()
 
-                loaded_order = str(self.stego.state_size)
-                index = self.order_combo.findText(loaded_order)
-                if index >= 0:
-                    self.order_combo.setCurrentIndex(index)
+            self.stego.load_from_json(json_str)
+            self.is_default_model = False
 
-                self.update_status_display(file_name)
-                QMessageBox.information(self, "Success", f"Order {loaded_order} Markov model successfully restored from JSON!")
-            except Exception as e:
-                self.covertext_input.setPlainText(f"<< Error loading model: {e} >>")
+            loaded_order = str(self.stego.state_size)
+            index = self.order_combo.findText(loaded_order)
+            if index >= 0:
+                self.order_combo.blockSignals(True)
+                self.order_combo.setCurrentIndex(index)
+                self.order_combo.blockSignals(False)
+
+            self.update_status_display(file_name)
+            QMessageBox.information(
+                self, "Success", f"Order {loaded_order} Markov model successfully restored from JSON!"
+            )
+        except Exception as e:
+            self.covertext_input.setPlainText(f"<< Error loading model: {e} >>")
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def do_embed(self):
         secret = self.secret_input.toPlainText()
         key = self.key_input.text().strip()
         ignore_punct = self.ignore_punct_cb.isChecked()
+        block_l = int(self.block_l_combo.currentText())
 
         if not secret:
             QMessageBox.warning(self, "Error", "Please enter a message to hide in the 'Secret Msg' field.")
             return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            stego_text = self.stego.encode(secret, L=3, stego_key=key, ignore_punct=ignore_punct)
+            stego_text = self.stego.encode(secret, L=block_l, stego_key=key, ignore_punct=ignore_punct)
             self.result_output.setPlainText(stego_text)
+
+            stats = MarkovStego.compute_stats(secret, stego_text)
+            self.stats_label.setText(
+                f"Container stats: Words (V) = {stats['words']} | Unique (D) = {stats['unique']} | "
+                f"Repeatability (R) = {stats['repeatability']:.2f} | "
+                f"Payload = {stats['secret_bytes']} B | Capacity = {stats['capacity_pct']:.2f}%"
+            )
         except Exception as e:
             QMessageBox.critical(self, "Generation Error", str(e))
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def do_extract(self):
         stego_text = self.secret_input.toPlainText()
         key = self.key_input.text().strip()
         ignore_punct = self.ignore_punct_cb.isChecked()
+        block_l = int(self.block_l_combo.currentText())
 
         if not stego_text:
-            QMessageBox.warning(self, "Error", "Please paste the steganographic text into the 'Secret Msg / Stegano Text' field.")
+            QMessageBox.warning(
+                self, "Error", "Please paste the steganographic text into the 'Secret Msg / Stegano Text' field."
+            )
             return
 
         if "--- EXTRACTED SECRET MESSAGE ---" in stego_text:
             QMessageBox.warning(self, "Warning", "Please paste the original steganogram, not the extracted message.")
             return
 
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            secret = self.stego.decode(stego_text, L=3, stego_key=key, ignore_punct=ignore_punct)
+            secret = self.stego.decode(stego_text, L=block_l, stego_key=key, ignore_punct=ignore_punct)
             self.result_output.setPlainText(f"--- EXTRACTED SECRET MESSAGE ---\n\n{secret}")
+            self.stats_label.setText(f"Extracted payload: {len(secret.encode('utf-8'))} bytes")
         except Exception as e:
             QMessageBox.critical(self, "Extraction Error", str(e))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def copy_result_to_clipboard(self):
+        text = self.result_output.toPlainText()
+        if not text:
+            QMessageBox.warning(self, "Warning", "Nothing to copy.")
+            return
+        QApplication.clipboard().setText(text)
+        QMessageBox.information(self, "Copied", "Result copied to clipboard.")
+
+    def save_result_to_file(self):
+        text = self.result_output.toPlainText()
+        if not text:
+            QMessageBox.warning(self, "Warning", "Nothing to save.")
+            return
+        options = QFileDialog.Options()
+        file_name, _ = QFileDialog.getSaveFileName(
+            self, "Save Result", "steganogram.txt", "Text Files (*.txt)", options=options
+        )
+        if file_name:
+            with open(file_name, 'w', encoding='utf-8') as f:
+                f.write(text)
+            QMessageBox.information(self, "Saved", "Result saved to file.")
