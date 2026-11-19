@@ -8,9 +8,10 @@ from nltk.corpus import wordnet as wn
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QFileDialog,
+    QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -107,7 +108,7 @@ ENGLISH_CHAR_FREQS = {
 
 KDF_SALT = b"stego_synonym_aes_ctr_kdf_v1"
 KDF_ITERATIONS = 100_000
-INITIAL_COUNTER_IV = 1  # Stały IV=1 inkrementowany co blok AES (brak narzutu bajtów na IV)
+INITIAL_COUNTER_IV = 1
 
 
 def _ensure_wordnet():
@@ -132,7 +133,6 @@ def _build_english_huffman_codec() -> HuffmanCodec:
 
 
 def _derive_aes_key(password: str) -> bytes:
-    """Wyprowadza 256-bitowy klucz AES z hasła za pomocą PyCryptodome PBKDF2 + HMAC-SHA256."""
     return PBKDF2(
         password.encode("utf-8"),
         KDF_SALT,
@@ -143,14 +143,12 @@ def _derive_aes_key(password: str) -> bytes:
 
 
 def _aes_ctr_encrypt(data: bytes, password: str) -> bytes:
-    """Szyfruje bajty w trybie AES-CTR ze stałym licznikiem startowym IV=1 (bez narzutu IV)."""
     key = _derive_aes_key(password)
     cipher = AES.new(key, AES.MODE_CTR, initial_value=INITIAL_COUNTER_IV, nonce=b"")
     return cipher.encrypt(data)
 
 
 def _aes_ctr_decrypt(ciphertext: bytes, password: str) -> bytes:
-    """Deszyfruje bajty w trybie AES-CTR ze stałym licznikiem startowym IV=1 (bez narzutu IV)."""
     key = _derive_aes_key(password)
     cipher = AES.new(key, AES.MODE_CTR, initial_value=INITIAL_COUNTER_IV, nonce=b"")
     return cipher.decrypt(ciphertext)
@@ -158,10 +156,14 @@ def _aes_ctr_decrypt(ciphertext: bytes, password: str) -> bytes:
 
 class SynonymStegoTab(TabTemplate):
     FILTER_KEYWORDS = {
-        "obsolete": ("obsolete", "archaic"),
-        "slang": ("slang",),
-        "element": ("chemical element", "atomic number", "radioactive", "symbol"),
-        "abbreviation": ("abbreviation",),
+        "obsolete": ("obsolete", "archaic", "dated"),
+        "slang": ("slang", "colloquial", "informal", "vulgar"),
+        "element": ("chemical element", "atomic number", "radioactive", "isotope", "symbol"),
+        "abbreviation": ("abbreviation", "acronym", "initialism"),
+        "medical": ("disease", "disorder", "syndrome", "anatomy", "pathology", "inflammation"),
+        "legal": ("law", "legal", "statute", "jurisprudence", "offense", "offence"),
+        "military": ("military", "weapon", "artillery", "warfare", "army", "naval"),
+        "derogatory": ("derogatory", "offensive", "disparaging", "pejorative"),
     }
 
     def __init__(self):
@@ -175,50 +177,108 @@ class SynonymStegoTab(TabTemplate):
                 "WordNet Synonym Order Steganography:\n"
                 "1. Enter English Cover Text (longer text = higher capacity).\n"
                 "2. Enter Secret Message.\n"
-                "3. Toggle lexical filters (obsolete, slang, element, abbreviation, genus/species) "
-                "and optionally toggle 'Use Huffman Coding (dahuffman)'.\n"
-                "4. Optionally enter a password in 'Key' to derive an AES-CTR key via PBKDF2 "
-                "(fixed IV=1 per block, no IV overhead).\n"
+                "3. Click 'Lexical Group Filters' to expand and customize WordNet domain/POS filters.\n"
+                "4. Optionally toggle 'Use Huffman Coding (dahuffman)' and enter a password in 'Key' "
+                "for PBKDF2 + AES-CTR (fixed IV=1 per block, no IV overhead).\n"
                 "5. Click 'Embed Secret Message' or paste stego text into 'Cover Text' "
-                "and click 'Extract Secret Message' using the same options and password."
+                "and click 'Extract Secret Message' using the exact same filters, Huffman toggle, and password."
             ),
         )
         self.key_input.setPlaceholderText("Enter password for KDF + AES-CTR (optional)")
 
-        # Okienko wyboru filtrowania grup wyrazów z WordNetu
-        self.filter_group = QGroupBox("Lexical Group Filters (WordNet)")
-        filter_layout = QGridLayout()
+        # === Rozsuwany panel filtrów ===
+        self.toggle_filters_btn = QPushButton("▶ Lexical Group Filters (WordNet) [Expand]")
+        self.toggle_filters_btn.setCheckable(True)
+        self.toggle_filters_btn.setChecked(False)
+        self.toggle_filters_btn.setStyleSheet("text-align: left; font-weight: bold; padding: 6px;")
 
+        self.filter_panel = QFrame()
+        self.filter_panel.setFrameShape(QFrame.StyledPanel)
+        self.filter_panel.setVisible(False)
+
+        filter_main_layout = QVBoxLayout(self.filter_panel)
+        filter_grid = QGridLayout()
+
+        # Filtry domenowe / rejestru
         self.filter_obsolete_cb = QCheckBox("Filter obsolete / archaic")
         self.filter_obsolete_cb.setChecked(True)
 
-        self.filter_slang_cb = QCheckBox("Filter slang")
+        self.filter_slang_cb = QCheckBox("Filter slang / colloquial")
         self.filter_slang_cb.setChecked(True)
 
         self.filter_element_cb = QCheckBox("Filter chemical element / symbol")
         self.filter_element_cb.setChecked(True)
 
-        self.filter_abbrev_cb = QCheckBox("Filter abbreviation")
+        self.filter_abbrev_cb = QCheckBox("Filter abbreviation / acronym")
         self.filter_abbrev_cb.setChecked(True)
 
         self.filter_taxon_cb = QCheckBox("Filter genus / species nouns")
         self.filter_taxon_cb.setChecked(True)
 
-        filter_layout.addWidget(self.filter_obsolete_cb, 0, 0)
-        filter_layout.addWidget(self.filter_slang_cb, 0, 1)
-        filter_layout.addWidget(self.filter_element_cb, 1, 0)
-        filter_layout.addWidget(self.filter_abbrev_cb, 1, 1)
-        filter_layout.addWidget(self.filter_taxon_cb, 2, 0, 1, 2)
-        self.filter_group.setLayout(filter_layout)
+        self.filter_medical_cb = QCheckBox("Filter medical / anatomy")
+        self.filter_medical_cb.setChecked(True)
 
-        # Wpinamy okienko filtrów w lewej kolumnie przed sekcją Actions
+        self.filter_legal_cb = QCheckBox("Filter legal / law terms")
+        self.filter_legal_cb.setChecked(False)
+
+        self.filter_military_cb = QCheckBox("Filter military / weapons")
+        self.filter_military_cb.setChecked(False)
+
+        self.filter_derogatory_cb = QCheckBox("Filter derogatory / offensive")
+        self.filter_derogatory_cb.setChecked(True)
+
+        filter_grid.addWidget(self.filter_obsolete_cb, 0, 0)
+        filter_grid.addWidget(self.filter_slang_cb, 0, 1)
+        filter_grid.addWidget(self.filter_element_cb, 1, 0)
+        filter_grid.addWidget(self.filter_abbrev_cb, 1, 1)
+        filter_grid.addWidget(self.filter_taxon_cb, 2, 0)
+        filter_grid.addWidget(self.filter_medical_cb, 2, 1)
+        filter_grid.addWidget(self.filter_legal_cb, 3, 0)
+        filter_grid.addWidget(self.filter_military_cb, 3, 1)
+        filter_grid.addWidget(self.filter_derogatory_cb, 4, 0, 1, 2)
+
+        filter_main_layout.addLayout(filter_grid)
+
+        # Filtry części mowy (POS) + minimalna długość słowa
+        pos_row = QHBoxLayout()
+        pos_row.addWidget(QLabel("<b>Allowed POS:</b>"))
+
+        self.pos_adj_cb = QCheckBox("Adjectives")
+        self.pos_adj_cb.setChecked(True)
+
+        self.pos_verb_cb = QCheckBox("Verbs")
+        self.pos_verb_cb.setChecked(True)
+
+        self.pos_noun_cb = QCheckBox("Nouns")
+        self.pos_noun_cb.setChecked(True)
+
+        self.pos_adv_cb = QCheckBox("Adverbs")
+        self.pos_adv_cb.setChecked(False)
+
+        pos_row.addWidget(self.pos_adj_cb)
+        pos_row.addWidget(self.pos_verb_cb)
+        pos_row.addWidget(self.pos_noun_cb)
+        pos_row.addWidget(self.pos_adv_cb)
+        pos_row.addStretch()
+
+        pos_row.addWidget(QLabel("<b>Min word len:</b>"))
+        self.min_len_combo = QComboBox()
+        self.min_len_combo.addItems(["3", "4", "5"])
+        self.min_len_combo.setCurrentText("3")
+        pos_row.addWidget(self.min_len_combo)
+
+        filter_main_layout.addLayout(pos_row)
+
+        # Wpinamy przycisk i rozsuwany panel w lewej kolumnie przed sekcją Actions
         left_layout = self.input_group.parentWidget().layout()
         if left_layout is not None:
             idx = left_layout.indexOf(self.action_group)
             if idx >= 0:
-                left_layout.insertWidget(idx, self.filter_group)
+                left_layout.insertWidget(idx, self.toggle_filters_btn)
+                left_layout.insertWidget(idx + 1, self.filter_panel)
             else:
-                left_layout.addWidget(self.filter_group)
+                left_layout.addWidget(self.toggle_filters_btn)
+                left_layout.addWidget(self.filter_panel)
 
         # Przełącznik kodowania Huffmana
         self.use_huffman_cb = QCheckBox("Use Huffman Coding (English / dahuffman)")
@@ -267,41 +327,81 @@ class SynonymStegoTab(TabTemplate):
         output_layout.addWidget(self.stats_label)
         output_layout.addLayout(output_btn_row)
 
-        # Budujemy grupy synonimów zgodnie z aktywnymi filtrami
+        # Pierwsze zbudowanie grup synonimów
         self.raw_groups = self._extract_wordnet_groups()
 
-        # Sygnały
+        # Połączenia sygnałów
+        self.toggle_filters_btn.toggled.connect(self.on_toggle_filters_panel)
+
         for cb in (
             self.filter_obsolete_cb,
             self.filter_slang_cb,
             self.filter_element_cb,
             self.filter_abbrev_cb,
             self.filter_taxon_cb,
+            self.filter_medical_cb,
+            self.filter_legal_cb,
+            self.filter_military_cb,
+            self.filter_derogatory_cb,
+            self.pos_adj_cb,
+            self.pos_verb_cb,
+            self.pos_noun_cb,
+            self.pos_adv_cb,
         ):
             cb.stateChanged.connect(self.on_filters_changed)
+
+        self.min_len_combo.currentTextChanged.connect(self.on_filters_changed)
 
         self.embed_button.clicked.connect(self.handle_embed)
         self.extract_button.clicked.connect(self.handle_extract)
         self.btn_copy_result.clicked.connect(self.copy_result_to_clipboard)
         self.btn_save_result.clicked.connect(self.save_result_to_file)
 
+    def on_toggle_filters_panel(self, checked: bool):
+        self.filter_panel.setVisible(checked)
+        if checked:
+            self.toggle_filters_btn.setText("▼ Lexical Group Filters (WordNet) [Collapse]")
+        else:
+            self.toggle_filters_btn.setText("▶ Lexical Group Filters (WordNet) [Expand]")
+
     def _active_blocked_keywords(self) -> tuple[str, ...]:
         blocked = []
-        if self.filter_obsolete_cb.isChecked():
-            blocked.extend(self.FILTER_KEYWORDS["obsolete"])
-        if self.filter_slang_cb.isChecked():
-            blocked.extend(self.FILTER_KEYWORDS["slang"])
-        if self.filter_element_cb.isChecked():
-            blocked.extend(self.FILTER_KEYWORDS["element"])
-        if self.filter_abbrev_cb.isChecked():
-            blocked.extend(self.FILTER_KEYWORDS["abbreviation"])
+        mapping = (
+            (self.filter_obsolete_cb, "obsolete"),
+            (self.filter_slang_cb, "slang"),
+            (self.filter_element_cb, "element"),
+            (self.filter_abbrev_cb, "abbreviation"),
+            (self.filter_medical_cb, "medical"),
+            (self.filter_legal_cb, "legal"),
+            (self.filter_military_cb, "military"),
+            (self.filter_derogatory_cb, "derogatory"),
+        )
+        for checkbox, key in mapping:
+            if checkbox.isChecked():
+                blocked.extend(self.FILTER_KEYWORDS[key])
         return tuple(blocked)
+
+    def _active_pos_set(self) -> set:
+        pos_set = set()
+        if self.pos_adj_cb.isChecked():
+            pos_set.add(wn.ADJ)
+        if self.pos_verb_cb.isChecked():
+            pos_set.add(wn.VERB)
+        if self.pos_noun_cb.isChecked():
+            pos_set.add(wn.NOUN)
+        if self.pos_adv_cb.isChecked():
+            pos_set.add(wn.ADV)
+        return pos_set
 
     def _extract_wordnet_groups(self):
         groups = []
-        allowed_pos = {wn.ADJ, wn.VERB, wn.NOUN}
+        allowed_pos = self._active_pos_set()
+        if not allowed_pos:
+            return groups
+
         blocked_keywords = self._active_blocked_keywords()
         filter_taxon = self.filter_taxon_cb.isChecked()
+        min_len = int(self.min_len_combo.currentText())
 
         for synset in wn.all_synsets():
             if synset.pos() not in allowed_pos:
@@ -321,7 +421,7 @@ class SynonymStegoTab(TabTemplate):
                 for lemma in synset.lemmas()
                 if lemma.name().isalpha()
                 and "_" not in lemma.name()
-                and len(lemma.name()) >= 3
+                and len(lemma.name()) >= min_len
             ]
             unique_lemmas = sorted(set(lemmas))
             if len(unique_lemmas) >= 2:
@@ -337,9 +437,10 @@ class SynonymStegoTab(TabTemplate):
             QApplication.restoreOverrideCursor()
 
     def _build_word_to_group(self):
+        min_len = int(self.min_len_combo.currentText())
         word_to_group = {}
         for group in self.raw_groups:
-            cleaned = sorted({w.strip().lower() for w in group if w.isalpha() and len(w) >= 3})
+            cleaned = sorted({w.strip().lower() for w in group if w.isalpha() and len(w) >= min_len})
             if len(cleaned) < 2:
                 continue
 
@@ -466,11 +567,13 @@ class SynonymStegoTab(TabTemplate):
         stego_text = "".join(out_tokens)
         self.result_output.setPlainText(stego_text)
 
-        secret_bits = len(secret_message.encode("utf-8")) * 8
         cover_bits = len(cover_text.encode("utf-8")) * 8
-        capacity_pct = (secret_bits / cover_bits * 100.0) if cover_bits > 0 else 0.0
-
         embedded_bits = min(bit_idx, total_bits)
+
+        max_capacity_pct = (max_slot_bits / cover_bits * 100.0) if cover_bits > 0 else 0.0
+        used_capacity_pct = (embedded_bits / cover_bits * 100.0) if cover_bits > 0 else 0.0
+        slot_utilization_pct = (embedded_bits / max_slot_bits * 100.0) if max_slot_bits > 0 else 0.0
+
         huff_label = "Huffman" if use_huffman else "raw"
         aes_label = f"AES-CTR(IV={INITIAL_COUNTER_IV})" if password else "AES:off"
         warning_suffix = ""
@@ -478,9 +581,10 @@ class SynonymStegoTab(TabTemplate):
             warning_suffix = " | WARNING: Cover text too short (message truncated)"
 
         self.stats_label.setText(
-            f"Capacity: {secret_bits}/{cover_bits} bits ({capacity_pct:.2f}%) | "
-            f"Mode: {huff_label} + {aes_label} (payload {payload_bytes_len}B) | "
-            f"Stream: {embedded_bits}/{total_bits} bits (slots: {used_slots}/{max_slot_bits}b){warning_suffix}"
+            f"Max Capacity: {max_capacity_pct:.2f}% ({max_slot_bits}/{cover_bits}b) | "
+            f"Used Capacity: {used_capacity_pct:.2f}% ({embedded_bits}/{cover_bits}b, "
+            f"{slot_utilization_pct:.1f}% of slots) | "
+            f"Mode: {huff_label} + {aes_label} ({payload_bytes_len}B){warning_suffix}"
         )
 
     def handle_extract(self):
@@ -497,6 +601,8 @@ class SynonymStegoTab(TabTemplate):
             return
 
         word_to_group = self._build_word_to_group()
+        max_slot_bits = self._max_embeddable_bits(stego_text, word_to_group)
+
         tokens = re.split(r"(\W+)", stego_text)
         extracted_bits = []
         matched_slots = 0
@@ -510,23 +616,32 @@ class SynonymStegoTab(TabTemplate):
                 extracted_bits.append(f"{syn_idx:0{bits_per_slot}b}")
                 matched_slots += 1
 
+        raw_extracted_bits = "".join(extracted_bits)
         decoded_message, is_complete = self._recover_message_from_bits(
-            "".join(extracted_bits), use_huffman, password
+            raw_extracted_bits, use_huffman, password
         )
         self.result_output.setPlainText(decoded_message)
 
-        secret_bits = len(decoded_message.encode("utf-8")) * 8
         stego_bits = len(stego_text.encode("utf-8")) * 8
-        capacity_pct = (secret_bits / stego_bits * 100.0) if stego_bits > 0 else 0.0
+        max_capacity_pct = (max_slot_bits / stego_bits * 100.0) if stego_bits > 0 else 0.0
+
+        # Liczba bajtów odczytanych z nagłówka ramki
+        total_bytes = len(raw_extracted_bits) // 8
+        used_bits = 0
+        if total_bytes >= 2:
+            all_bytes = bytes(int(raw_extracted_bits[i : i + 8], 2) for i in range(0, total_bytes * 8, 8))
+            expected_len = int.from_bytes(all_bytes[:2], "big")
+            used_bits = min((2 + expected_len) * 8, len(raw_extracted_bits))
+        used_capacity_pct = (used_bits / stego_bits * 100.0) if stego_bits > 0 else 0.0
 
         huff_label = "Huffman" if use_huffman else "raw"
         aes_label = f"AES-CTR(IV={INITIAL_COUNTER_IV})" if password else "AES:off"
-        status_suffix = "" if is_complete else " | WARNING: Incomplete message or wrong password/settings"
+        status_suffix = "" if is_complete else " | WARNING: Incomplete message or wrong filters/password"
 
         self.stats_label.setText(
-            f"Capacity: {secret_bits}/{stego_bits} bits ({capacity_pct:.2f}%) | "
-            f"Mode: {huff_label} + {aes_label} | "
-            f"Extracted from {matched_slots} slot(s){status_suffix}"
+            f"Max Capacity: {max_capacity_pct:.2f}% ({max_slot_bits}/{stego_bits}b) | "
+            f"Used Capacity: {used_capacity_pct:.2f}% ({used_bits}/{stego_bits}b) | "
+            f"Mode: {huff_label} + {aes_label} | Slots: {matched_slots}{status_suffix}"
         )
 
     def copy_result_to_clipboard(self):
