@@ -1,5 +1,5 @@
 import markovify
-import json
+#import json
 import random
 import string
 from fractions import Fraction
@@ -7,7 +7,6 @@ from markovify.chain import BEGIN, END
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt
 
-# Make sure templates.py is in the same directory
 from templates import TabTemplate
 
 
