@@ -7,11 +7,13 @@ from algo8 import Algo8Tab
 from algo9 import Algo9Tab
 from algo14 import Algo14Tab
 from algo12 import AlgoMarkovTab
+
+from algo_ours import SynonymStegoTab
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Steganography Project - Adam Bojek, Kerem Özdoğan")
-        self.resize(1900, 800)
+        self.resize(1700, 800)
 
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -24,6 +26,7 @@ class MainWindow(QMainWindow):
         self.tab_algo9 = Algo9Tab()
         self.tab_algo14 = Algo14Tab()
         self.tab_algo12 = AlgoMarkovTab()
+        self.tab_synonyms = SynonymStegoTab()
         self.tabs.addTab(self.tab_home, "Home")
         self.tabs.addTab(self.tab_algo1, "Algorithm 1")
         self.tabs.addTab(self.tab_algo4, "Algorithm 4")
@@ -31,6 +34,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.tab_algo9, "Algorithm 9")
         self.tabs.addTab(self.tab_algo14, "Algorithm 14")
         self.tabs.addTab(self.tab_algo12, "Algorithm 12")
+        self.tabs.addTab(self.tab_synonyms, "Our Algorithm")
         self.init_home_tab()
 
     def init_home_tab(self):
