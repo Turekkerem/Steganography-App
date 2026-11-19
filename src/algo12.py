@@ -190,18 +190,18 @@ class MarkovStego:
         finally:
             random.seed()
 
-        # Phase 3: Assemble output text attaching sentence-ending dots cleanly
+        # Phase 3: Assemble output text using '\n' instead of '.' for END tokens
         output_tokens = []
         for token in generated_tokens:
             if token == END:
                 if output_tokens:
-                    output_tokens[-1] += "."
-                else:
-                    output_tokens.append(".")
+                    output_tokens.append("\n")
             else:
+                if output_tokens and output_tokens[-1] != "\n":
+                    output_tokens.append(" ")
                 output_tokens.append(token)
 
-        return " ".join(output_tokens)
+        return "".join(output_tokens)
 
     def decode(self, stego_text, L=3, stego_key="", ignore_punct=True):
         if not self.model:
@@ -209,7 +209,18 @@ class MarkovStego:
         if L < 1:
             raise ValueError("Bit block length L must be at least 1.")
 
-        words_to_process = list(stego_text.split())
+        if not stego_text or not stego_text.strip():
+            raise ValueError("Steganographic text is empty.")
+
+        words_to_process = []
+        for line in stego_text.splitlines(keepends=True):
+            has_newline = line.endswith("\n") or line.endswith("\r")
+            clean_line = line.strip()
+            if clean_line:
+                words_to_process.extend(clean_line.split())
+            if has_newline:
+                words_to_process.append(END)
+
         if not words_to_process:
             raise ValueError("Steganographic text is empty.")
 
@@ -234,15 +245,6 @@ class MarkovStego:
             choices_dict = self.model.get(state, {END: 1})
             target_word = raw_word
 
-            # Strip trailing dot if it encodes an END token
-            if raw_word == ".":
-                target_word = END
-            elif raw_word.endswith('.'):
-                clean = raw_word[:-1]
-                if raw_word not in choices_dict and clean in choices_dict:
-                    target_word = clean
-                    words_to_process.insert(word_idx + 1, END)
-
             choices = sorted(choices_dict.items())
             total_weight = sum(w for _, w in choices)
 
@@ -261,9 +263,10 @@ class MarkovStego:
                 current_low = next_low
 
             if not found:
+                shown_word = "<NEWLINE / END>" if target_word == END else target_word
                 raise ValueError(
                     f"Graph desynchronization. Incorrect key, wrong Block L, or corrupted text.\n"
-                    f"Looked for word: '{target_word}' for state: {state}\n"
+                    f"Looked for word: '{shown_word}' for state: {state}\n"
                     f"Available words in this node: {list(choices_dict.keys())[:5]}"
                 )
 
